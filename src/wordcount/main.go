@@ -32,15 +32,14 @@ func mapF(fileName string, contents string) (res []mr.KeyValue) {
 // of that key's string value (merged across all inputs). The return value
 // should be a single output value for that key.
 func reduceF(key string, values []string) string {
-	// FIXME: Implement me.
-
 	total := uint64(0)
 
 	for _, count := range values {
 		x, err := strconv.ParseUint(count, 0, 64)
 
 		if err != nil {
-			fmt.Println("WC reduceF: failed to parse");
+			fmt.Println("WC reduceF: failed to parse %s", count);
+			panic(err)
 		}
 
 		total += x
