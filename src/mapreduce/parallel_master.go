@@ -80,8 +80,9 @@ func (m *ParallelMaster) Start() {
 func (m *ParallelMaster) schedule(tasks chan TaskArgs) {
 	counter := uint64(0)
 	taskcount := uint64(len(tasks))
-fmt.Printf("task count: %d\n", taskcount)
-	for {
+	fmt.Printf("task count: %d\n", taskcount)
+
+	for counter != taskcount {
 		select {
 		case task := <-tasks:
 			go func() {
@@ -89,18 +90,12 @@ fmt.Printf("task count: %d\n", taskcount)
 				ok := callWorker(workerAddress, task.TaskName(), task, new(interface{}))
 				m.freeWorkers <- workerAddress
 
-				if (!ok) {
+				if !ok {
 					tasks <- task
 				} else {
 					atomic.AddUint64(&counter, 1)
 				}
 			}()
-		default:
-			if counter == taskcount {
-				return
-			} else {
-				fmt.Printf("counter: %d\n", counter)
-			}
 		}
 	}
 }

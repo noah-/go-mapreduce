@@ -115,9 +115,9 @@ function test_pr() {
   check_output "pagerank" "pr" "sort -k2,2 -srn | cut -c-13 | head -n 15"
 }
 
-#run_test 1 go test mapreduce --cwd="$PWD" -run SequentialNoMerge $goflags
-#run_test 2 go test mapreduce --cwd="$PWD" -run FullSequential $goflags
-#run_test 3 test_wc
+run_test 1 go test mapreduce --cwd="$PWD" -run SequentialNoMerge $goflags
+run_test 2 go test mapreduce --cwd="$PWD" -run FullSequential $goflags
+run_test 3 test_wc
 run_test 4 go test mapreduce --cwd="$PWD" -run Parallel $goflags
 #run_test 5 test_ii
 # run_test 6 test_pr # TODO: Uncomment me for extra credit phase.
