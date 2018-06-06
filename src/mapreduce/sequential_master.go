@@ -35,11 +35,16 @@ func (s *SequentialMaster) Register(workerAddress string) {
 // job has completed.
 func (m *SequentialMaster) Start() {
 	m.active = true
-	// Don't remove the code above here.
 
-	// FIXME: Create a single worker and ask it to perform all of the map tasks
-	// followed by all of the reduce tasks. There is one map task per input
-	// file, and `m.NumReducers` number of reduce tasks.
+	w := *NewWorker(m.JobName, m.MapF, m.ReduceF)
+
+	for i, file := range m.InputFileNames {
+		w.DoMap(file, uint(i), m.NumReducers);
+	}
+
+	for i := uint(0); i < m.NumReducers; i++ {
+		w.DoReduce(i, uint(len(m.InputFileNames)))
+	}
 }
 
 // Merges the output of all reduce tasks into one file. Returns the filename for
