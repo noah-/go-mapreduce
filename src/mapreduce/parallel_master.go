@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
+	"sync"
 )
 
 // A parallel master executes a MapReduce job on many workers in parallel.
@@ -54,9 +55,21 @@ func (m *ParallelMaster) Start() {
 	m.rpcListener = startMasterRPCServer(m)
 	// Don't remove the code above here.
 
-	// FIXME: Create a buffered channel and send it each map task argument
-	// structure. Then, call `schedule` with the channel as input. Do the same
-	// for reduce tasks afterwards.
+	count := uint(len(m.InputFileNames))
+
+	mapbuffer := make(chan TaskArgs, count)
+	reducebuffer := make(chan TaskArgs, m.NumReducers)
+
+	for i, task := range m.InputFileNames {
+		mapbuffer <- TaskArgs(&DoMapArgs{ task, uint(i), m.NumReducers })
+	}
+
+	for i := uint(0); i < m.NumReducers; i += 1 {
+		reducebuffer <- TaskArgs(&DoReduceArgs{ i, count })
+	}
+
+	m.schedule(mapbuffer)
+	m.schedule(reducebuffer)
 
 	// Don't remove the code below here.
 	m.Shutdown()
@@ -66,9 +79,29 @@ func (m *ParallelMaster) Start() {
 // Dishes out work to all available workers until all the tasks are complete.
 // Blocks until all the work with arguments in `tasks` has been completed.
 func (m *ParallelMaster) schedule(tasks chan TaskArgs) {
-	// FIXME: Use `callWorker` to send an RPC (named `task.TaskName()`) to free
-	// workers until all tasks have been completed. Watch out for failing
-	// workers!
+	var wg sync.WaitGroup
+	wg.Add(len(tasks))
+
+	for {
+		select {
+		case task := <-tasks:
+			go func() {
+				workerAddress := <-m.freeWorkers
+				ok := callWorker(workerAddress, task.TaskName(), task, new(interface{}))
+
+				if (!ok) {
+					tasks <- task
+				} else {
+					wg.Done();
+				}
+
+				m.freeWorkers <- workerAddress
+			}()
+		default:
+			wg.Wait();
+			return
+		}
+	}
 }
 
 // Merges the output of all reduce tasks into one file. Returns the filename for
