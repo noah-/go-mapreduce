@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
-	"sync"
 )
 
 // A parallel master executes a MapReduce job on many workers in parallel.
@@ -79,27 +78,29 @@ func (m *ParallelMaster) Start() {
 // Dishes out work to all available workers until all the tasks are complete.
 // Blocks until all the work with arguments in `tasks` has been completed.
 func (m *ParallelMaster) schedule(tasks chan TaskArgs) {
-	var wg sync.WaitGroup
-	wg.Add(len(tasks))
-
+	counter := uint64(0)
+	taskcount := uint64(len(tasks))
+fmt.Printf("task count: %d\n", taskcount)
 	for {
 		select {
 		case task := <-tasks:
 			go func() {
 				workerAddress := <-m.freeWorkers
 				ok := callWorker(workerAddress, task.TaskName(), task, new(interface{}))
+				m.freeWorkers <- workerAddress
 
 				if (!ok) {
 					tasks <- task
 				} else {
-					wg.Done();
+					atomic.AddUint64(&counter, 1)
 				}
-
-				m.freeWorkers <- workerAddress
 			}()
 		default:
-			wg.Wait();
-			return
+			if counter == taskcount {
+				return
+			} else {
+				fmt.Printf("counter: %d\n", counter)
+			}
 		}
 	}
 }
