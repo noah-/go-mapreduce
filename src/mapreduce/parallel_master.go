@@ -55,7 +55,6 @@ func (m *ParallelMaster) Start() {
 	// Don't remove the code above here.
 
 	count := uint(len(m.InputFileNames))
-
 	mapbuffer := make(chan TaskArgs, count)
 	reducebuffer := make(chan TaskArgs, m.NumReducers)
 
@@ -80,7 +79,6 @@ func (m *ParallelMaster) Start() {
 func (m *ParallelMaster) schedule(tasks chan TaskArgs) {
 	counter := uint64(0)
 	taskcount := uint64(len(tasks))
-	fmt.Printf("task count: %d\n", taskcount)
 
 	for counter != taskcount {
 		select {
@@ -88,14 +86,17 @@ func (m *ParallelMaster) schedule(tasks chan TaskArgs) {
 			go func() {
 				workerAddress := <-m.freeWorkers
 				ok := callWorker(workerAddress, task.TaskName(), task, new(interface{}))
-				m.freeWorkers <- workerAddress
 
 				if !ok {
 					tasks <- task
 				} else {
 					atomic.AddUint64(&counter, 1)
 				}
+
+				m.freeWorkers <- workerAddress
 			}()
+		default:
+			break
 		}
 	}
 }
