@@ -2,6 +2,23 @@ package main
 
 import (
 	mr "mapreduce"
+	"strings"
+	"bufio"
+	"fmt"
+	"bytes"
+	"io"
+	"io/ioutil"
+	"os"
+	"runtime"
+	"strconv"
+	"time"
+)
+
+const (
+	job = "pagerank"
+	converge = 10
+	d = 0.85
+	N = 20000
 )
 
 // The mapping function is called once for each piece of the input. In this
@@ -9,7 +26,29 @@ import (
 // value is the file's contents. The return value should be a slice of key/value
 // pairs, each represented by a mapreduce.KeyValue.
 func mapF(fileName string, contents string) (res []mr.KeyValue) {
-	// TODO: Implement me for extra credit.
+	scanner := bufio.NewScanner(strings.NewReader(contents))
+
+	for scanner.Scan() {
+		values := strings.FieldsFunc(scanner.Text(), func(c rune) bool { return c == ':' || c == ',' || c == ' ' })
+
+		if (len(values) < 3) {
+			continue
+		}
+
+		p, err := strconv.ParseFloat(values[1], 64)
+		checkErr(err, "mapF: Failed to parse in scanner");
+
+		pr := strconv.FormatFloat(p / float64(len(values) - 2), 'f', -1, 64)
+
+		for i := 2; i < len(values); i+= 1 {
+			res = append(res, mr.KeyValue{values[i], pr})
+		}
+
+		pr = strconv.FormatFloat((1 - d) / (N * d), 'f', -1, 64)
+		res = append(res, mr.KeyValue{values[0], pr})
+	}
+
+	checkErr(scanner.Err(), "mapF: Error found in scanner");
 
 	return
 }
@@ -18,20 +57,141 @@ func mapF(fileName string, contents string) (res []mr.KeyValue) {
 // of that key's string value (merged across all inputs). The return value
 // should be a single output value for that key.
 func reduceF(key string, values []string) string {
-	// TODO: Implement me for extra credit.
+	sum := float64(0)
 
-	return ""
+	for _, pr := range values {
+		p, err := strconv.ParseFloat(pr, 64)
+		checkErr(err, "reduceF: Failed to parse float")
+		sum += p
+	}
+
+	return strconv.FormatFloat(d * sum, 'f', -1, 64)
 }
 
-// Parses the command line arguments and runs the computation.
 func main() {
-	// TODO: Implement this function for Page Rank. You won't be able to use
-	// `run` directly here since you'll need to iterative compute the page rank.
-	// See mr/parse_cmd_line.go for an example on how to use the library
-	// directly. Ignore the node type: you can choose what you do.
+	_, reducers, inputFileNames := mr.ParseCmdLine()
+	tmpInputFileNames := make([]string, len(inputFileNames))
 
-	// Some useful code, to get started:
-	// jobName := "pagerank"
-	// numIterations := 10
-	// _, reducers, inputFileNames := mr.ParseCmdLine()
+	// create copy of input files that we can modify
+	for i, file := range inputFileNames {
+		tmpInputFileNames[i] = file + ".tmp"
+		os.Remove(tmpInputFileNames[i])
+		copyFileContents(file, tmpInputFileNames[i])
+	}
+
+	// setup Parallel mapreduce, iterate to convergence
+	done := make(chan bool)
+
+	for i := 0; i < converge; i += 1 {
+		m := mr.NewParallelMaster(job, tmpInputFileNames, reducers, mapF, reduceF)
+
+		go func() {
+			m.Start()
+			done <- true
+		}()
+
+		// Make sure the master (probably) sets up so workers can register quickly.
+		runtime.Gosched()
+		time.Sleep(100 * time.Millisecond)
+		runtime.Gosched()
+
+		workers := make([]*mr.Worker, 0, len(inputFileNames))
+		for i := 0; i < len(inputFileNames); i++ {
+			worker := mr.NewWorker(job, mapF, reduceF)
+			workers = append(workers, worker)
+			go worker.Start()
+		}
+
+		<-done
+
+		outputFile := m.Merge()
+		updateFileData(tmpInputFileNames, outputFile)
+	}
+
+	// cleanup tmp files
+	for _, file := range tmpInputFileNames {
+		err := os.Remove(file)
+		checkErr(err, "Failed to remove file")
+        }
 }
+
+// updateFileData is used to update the input file contents on each iteration
+// Reads existing input file, modifies PR value and writes back
+func updateFileData(inputFileNames []string, updateFile string) {
+	newpr := make(map[string]string)
+
+	fileHandle, err := os.Open(updateFile)
+	checkErr(err, "File cannot be opened")
+
+	fileScanner := bufio.NewScanner(fileHandle)
+
+	for fileScanner.Scan() {
+		values := strings.Split(fileScanner.Text(), ": ")
+		newpr[values[0]] = values[1]
+	}
+
+	fileHandle.Close()
+
+	for _, file := range inputFileNames {
+		var newfile bytes.Buffer
+
+		fileHandle, err := os.Open(file)
+		checkErr(err, "File cannot be opened")
+
+		fileScanner := bufio.NewScanner(fileHandle)
+
+		for fileScanner.Scan() {
+			values := strings.FieldsFunc(fileScanner.Text(), func(c rune) bool { return c == ':' || c == ',' || c == ' ' })
+			newfile.WriteString(values[0] + ": " + newpr[values[0]] + ", " + strings.Join(values[2:len(values)], ", ") + "\n")
+		}
+
+	        fileHandle.Close()
+
+		err = ioutil.WriteFile(file, newfile.Bytes(), 0644)
+		checkErr(err, "File Write Failed")
+	}
+}
+
+// Source: https://stackoverflow.com/questions/21060945/simple-way-to-copy-a-file-in-golang
+// copyFileContents copies the contents of the file named src to the file named
+// by dst. The file will be created if it does not already exist. If the
+// destination file exists, all it's contents will be replaced by the contents
+// of the source file.
+func copyFileContents(src, dst string) (err error) {
+	in, err := os.Open(src)
+
+	if err != nil {
+		return
+	}
+
+	defer in.Close()
+	out, err := os.Create(dst)
+
+	if err != nil {
+		return
+	}
+
+	defer func() {
+		cerr := out.Close()
+
+		if err == nil {
+			err = cerr
+		}
+	}()
+
+	if _, err = io.Copy(out, in); err != nil {
+		return
+	}
+
+	err = out.Sync()
+	return
+}
+
+// Copied from common.go
+func checkErr(err error, msg string) {
+        if err != nil {
+                panicMessage := fmt.Sprintf("Error: %s\n%v", msg, err)
+                panic(panicMessage)
+        }
+}
+
