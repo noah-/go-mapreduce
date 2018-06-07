@@ -5,6 +5,10 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+	"encoding/json"
+	"io/ioutil"
+	"os"
+	"bytes"
 )
 
 // A worker executes a user's map and reduce functions.
@@ -55,8 +59,24 @@ func (w *Worker) DoMap(inputFileName string, mapperNum, numReducers uint) {
 	fmt.Printf("MAP[%s:%d]: Processing '%s' for %d reducers.\n", w.jobName,
 		mapperNum, inputFileName, numReducers)
 
-	// FIXME: Remove the line below and implement me when ready.
-	w.mapF("", "") // FIXME: Don't forget to remove me!
+	data, err := ioutil.ReadFile(inputFileName)
+	checkErr(err, "DoMap: Read Err.\n");
+
+	m := w.mapF(inputFileName, string(data))
+	p := make(map[uint][]KeyValue)
+
+	// create a map of target partition to KeyValue list
+	for _, pair := range m {
+		index := uint(ihash(pair.Key)) % numReducers
+		p[index] = append(p[index], pair)
+	}
+
+	// serialize KeyValue list and write to json file
+	for k, v := range p {
+		blob, _ := json.Marshal(v)
+		err := ioutil.WriteFile(reduceInputName(w.jobName, mapperNum, k), blob, 0644)
+		checkErr(err, "DoMap: Failed to write partition.\n")
+	}
 }
 
 // Run's the user's reduce function on the given inputs. It does this by reading
@@ -70,8 +90,41 @@ func (w *Worker) DoReduce(reducerNum, numMappers uint) {
 	fmt.Printf("REDUCE[%s:%d]: Reducing from %d mappers.\n", w.jobName,
 		reducerNum, numMappers)
 
-	// FIXME: Remove the line below and implement me when ready.
-	w.reduceF("", make([]string, 0)) // FIXME: Don't forget to remove me!
+	kvm := make(map[string][]string)
+
+	for i := uint(0); i < numMappers; i++ {
+		filename := reduceInputName(w.jobName, i, reducerNum)
+
+		if _, err := os.Stat(filename); os.IsNotExist(err) {
+			continue // no data from this mapper
+		}
+
+		data, err := ioutil.ReadFile(filename)
+		checkErr(err, "DoReduce: Read Err.\n")
+
+                p := make([]KeyValue, 0)
+		checkErr(json.Unmarshal(data, &p), "DoReduce: Failed to parse.\n");
+
+		for _, kv := range p {
+			kvm[kv.Key] = append(kvm[kv.Key], kv.Value)
+		}
+	}
+
+	out := make([]KeyValue, 0)
+
+	for k, v := range kvm {
+		out = append(out, KeyValue{k, w.reduceF(k, v)})
+	}
+
+	blob := new(bytes.Buffer)
+	enc := json.NewEncoder(blob)
+
+	for _, pair := range out {
+		enc.Encode(pair)
+	}
+
+	err := ioutil.WriteFile(ReduceOutputName(w.jobName, reducerNum), blob.Bytes(), 0644)
+	checkErr(err, "DoReduce: Failed to write output.\n")
 }
 
 // Shuts the worker down by shutting down the RPC server.
